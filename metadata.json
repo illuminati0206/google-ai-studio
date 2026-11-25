@@ -1,0 +1,6 @@
+{
+  "name": "Atelier",
+  "description": "Personal AI outfit designer, virtual wardrobe, 3D try-on studio, and event style planner",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

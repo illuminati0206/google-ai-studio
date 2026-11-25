@@ -1,0 +1,329 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: default deny all paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Hardened Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isOptionalString(data, key, maxLen) {
+      return !(key in data) || data[key] == null || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function isOptionalIntRange(data, key, minVal, maxVal) {
+      return !(key in data) || data[key] == null || (data[key] is int && data[key] >= minVal && data[key] <= maxVal);
+    }
+
+    function isOptionalBool(data, key) {
+      return !(key in data) || data[key] == null || data[key] is bool;
+    }
+
+    function isBoundedStringList(data, key, maxItems) {
+      return !(key in data) || data[key] == null || (
+        data[key] is list &&
+        data[key].size() <= maxItems &&
+        (data[key].size() == 0 || data[key][0] is string)
+      );
+    }
+
+    // --- Entity Validation Blueprints ---
+
+    function isValidUserStyleProfile(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.gender is string && data.gender in ['Women', 'Men', 'Non-Binary'] &&
+             isOptionalString(data, 'displayName', 100) &&
+             isBoundedStringList(data, 'stylePreferences', 12) &&
+             (!('budgetTier' in data) || data.budgetTier == null || (data.budgetTier is string && data.budgetTier in ['Accessible', 'Contemporary', 'Luxury', 'Sustainable First'])) &&
+             isOptionalString(data, 'bodyType', 60) &&
+             isOptionalIntRange(data, 'heightCm', 0, 260) &&
+             isOptionalIntRange(data, 'chestCm', 0, 220) &&
+             isOptionalIntRange(data, 'waistCm', 0, 220) &&
+             isOptionalIntRange(data, 'hipCm', 0, 220) &&
+             isOptionalIntRange(data, 'shoulderCm', 0, 100) &&
+             isOptionalString(data, 'skinTone', 60) &&
+             isOptionalString(data, 'skinUndertone', 60) &&
+             isBoundedStringList(data, 'bestColors', 12) &&
+             isBoundedStringList(data, 'avoidColors', 12) &&
+             isOptionalString(data, 'fitSummary', 600) &&
+             isOptionalString(data, 'bodyAnalysisNotes', 2000) &&
+             isOptionalString(data, 'bodyScanLocalPath', 400) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidWardrobeItem(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.category is string && data.category in ['Top', 'Bottom', 'Outerwear', 'Dress / Suit', 'Ethnic / Festive', 'Shoes', 'Footwear', 'Accessory'] &&
+             data.colorName is string && data.colorName.size() >= 1 && data.colorName.size() <= 60 &&
+             isOptionalString(data, 'colorHex', 16) &&
+             (!('materialType' in data) || data.materialType == null || (data.materialType is string && data.materialType in ['Silk', 'Cotton', 'Wool', 'Linen', 'Cashmere', 'Denim', 'Leather', 'Velvet', 'Synthetic Blend'])) &&
+             isOptionalString(data, 'fabric', 80) &&
+             isOptionalString(data, 'season', 40) &&
+             isOptionalString(data, 'formality', 40) &&
+             (!('conditionStatus' in data) || data.conditionStatus == null || (data.conditionStatus is string && data.conditionStatus in ['Mint', 'Good', 'Fair / Needs Care', 'Worn / Damaged'])) &&
+             (!('keepDecision' in data) || data.keepDecision == null || (data.keepDecision is string && data.keepDecision in ['Keep', 'Repair / Dry Clean', 'Donate / Replace'])) &&
+             isOptionalString(data, 'conditionNotes', 400) &&
+             isOptionalString(data, 'brand', 80) &&
+             isOptionalString(data, 'localImagePath', 400) &&
+             isOptionalIntRange(data, 'ecoScore', 0, 100) &&
+             isOptionalIntRange(data, 'wearCount', 0, 10000) &&
+             isOptionalString(data, 'notes', 400) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSavedOutfit(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.occasion is string && data.occasion.size() >= 1 && data.occasion.size() <= 60 &&
+             data.itemIds is list && data.itemIds.size() <= 12 && (data.itemIds.size() == 0 || data.itemIds[0] is string) &&
+             isOptionalString(data, 'itemSummary', 500) &&
+             isOptionalIntRange(data, 'colorHarmonyScore', 0, 100) &&
+             isOptionalIntRange(data, 'fitScore', 0, 100) &&
+             isOptionalString(data, 'stylingNotes', 1200) &&
+             isOptionalString(data, 'tryOnImagePath', 400) &&
+             (!('sourceType' in data) || data.sourceType == null || (data.sourceType is string && data.sourceType in ['MIX_MATCH', 'AI_CURATED', 'TRY_ON'])) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidPlannedOutfitEvent(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.eventTitle is string && data.eventTitle.size() >= 1 && data.eventTitle.size() <= 120 &&
+             data.occasion is string && data.occasion.size() >= 1 && data.occasion.size() <= 60 &&
+             data.dateIso is string && data.dateIso.size() >= 8 && data.dateIso.size() <= 20 &&
+             isOptionalString(data, 'timeLabel', 30) &&
+             isOptionalString(data, 'outfitId', 128) &&
+             isOptionalString(data, 'outfitTitle', 120) &&
+             isOptionalIntRange(data, 'reminderLeadMinutes', 0, 10080) &&
+             isOptionalBool(data, 'reminderEnabled') &&
+             isOptionalIntRange(data, 'reminderEpochMillis', 0, 9999999999999) &&
+             isOptionalString(data, 'notes', 400) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidDiscountAlert(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.itemName is string && data.itemName.size() >= 1 && data.itemName.size() <= 120 &&
+             data.brandName is string && data.brandName.size() >= 1 && data.brandName.size() <= 100 &&
+             isOptionalString(data, 'category', 60) &&
+             data.targetDiscountPercent is int && data.targetDiscountPercent >= 5 && data.targetDiscountPercent <= 90 &&
+             isOptionalIntRange(data, 'currentDiscountPercent', 0, 95) &&
+             isOptionalBool(data, 'ecoCertified') &&
+             data.activeAlert is bool &&
+             isOptionalString(data, 'seasonalTag', 80) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    // --- Collection Rules ---
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'gender', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'displayName', 'gender', 'stylePreferences', 'budgetTier',
+                         'bodyType', 'heightCm', 'chestCm', 'waistCm', 'hipCm', 'shoulderCm',
+                         'skinTone', 'skinUndertone', 'bestColors', 'avoidColors',
+                         'fitSummary', 'bodyAnalysisNotes', 'bodyScanLocalPath',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidUserStyleProfile(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidUserStyleProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt && (
+                         // Action: Update Style Preferences & Profile
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'displayName', 'gender', 'stylePreferences', 'budgetTier', 'updatedAt'
+                         ]) ||
+                         // Action: Update Body Scan & Skin Tone Fit Analysis
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'bodyType', 'heightCm', 'chestCm', 'waistCm', 'hipCm', 'shoulderCm',
+                           'skinTone', 'skinUndertone', 'bestColors', 'avoidColors',
+                           'fitSummary', 'bodyAnalysisNotes', 'bodyScanLocalPath', 'updatedAt'
+                         ]) ||
+                         // Action: Full Profile Sync
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'displayName', 'gender', 'stylePreferences', 'budgetTier',
+                           'bodyType', 'heightCm', 'chestCm', 'waistCm', 'hipCm', 'shoulderCm',
+                           'skinTone', 'skinUndertone', 'bestColors', 'avoidColors',
+                           'fitSummary', 'bodyAnalysisNotes', 'bodyScanLocalPath', 'updatedAt'
+                         ])
+                       );
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // Wardrobe Items Subcollection
+      match /wardrobeItems/{itemId} {
+        allow get: if isOwner(userId) && isValidId(itemId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(itemId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'category', 'colorName', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'name', 'category', 'colorName', 'colorHex', 'materialType',
+                           'fabric', 'season', 'formality', 'conditionStatus', 'keepDecision',
+                           'conditionNotes', 'brand', 'localImagePath', 'ecoScore',
+                           'wearCount', 'notes', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidWardrobeItem(incoming());
+
+        allow update: if isOwner(userId) &&
+                         isValidId(itemId) &&
+                         isValidWardrobeItem(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt && (
+                           // Action: Increment Wear Count
+                           incoming().diff(existing()).affectedKeys().hasOnly(['wearCount', 'updatedAt']) ||
+                           // Action: Update Condition & Keep/Replace Assessment
+                           incoming().diff(existing()).affectedKeys().hasOnly(['conditionStatus', 'keepDecision', 'conditionNotes', 'updatedAt']) ||
+                           // Action: Edit Garment Details
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'name', 'category', 'colorName', 'colorHex', 'materialType',
+                             'fabric', 'season', 'formality', 'conditionStatus', 'keepDecision',
+                             'conditionNotes', 'brand', 'localImagePath', 'ecoScore',
+                             'wearCount', 'notes', 'updatedAt'
+                           ])
+                         );
+
+        allow delete: if isOwner(userId) && isValidId(itemId);
+      }
+
+      // Saved Outfits Subcollection
+      match /outfits/{outfitId} {
+        allow get: if isOwner(userId) && isValidId(outfitId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(outfitId) &&
+                         incoming().keys().hasAll(['userId', 'title', 'occasion', 'itemIds', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'title', 'occasion', 'itemIds', 'itemSummary',
+                           'colorHarmonyScore', 'fitScore', 'stylingNotes', 'tryOnImagePath',
+                           'sourceType', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidSavedOutfit(incoming());
+
+        allow update: if isOwner(userId) &&
+                         isValidId(outfitId) &&
+                         isValidSavedOutfit(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt && (
+                           // Action: Attach 3D Try-On Render
+                           incoming().diff(existing()).affectedKeys().hasOnly(['tryOnImagePath', 'updatedAt']) ||
+                           // Action: Edit Outfit Combination
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'title', 'occasion', 'itemIds', 'itemSummary',
+                             'colorHarmonyScore', 'fitScore', 'stylingNotes', 'tryOnImagePath',
+                             'sourceType', 'updatedAt'
+                           ])
+                         );
+
+        allow delete: if isOwner(userId) && isValidId(outfitId);
+      }
+
+      // Calendar Planned Events Subcollection
+      match /plannedEvents/{eventId} {
+        allow get: if isOwner(userId) && isValidId(eventId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(eventId) &&
+                         incoming().keys().hasAll(['userId', 'eventTitle', 'occasion', 'dateIso', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'eventTitle', 'occasion', 'dateIso', 'timeLabel',
+                           'outfitId', 'outfitTitle', 'reminderLeadMinutes', 'reminderEnabled',
+                           'reminderEpochMillis', 'notes', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidPlannedOutfitEvent(incoming());
+
+        allow update: if isOwner(userId) &&
+                         isValidId(eventId) &&
+                         isValidPlannedOutfitEvent(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt && (
+                           // Action: Toggle Reminder
+                           incoming().diff(existing()).affectedKeys().hasOnly(['reminderEnabled', 'reminderEpochMillis', 'updatedAt']) ||
+                           // Action: Edit Planned Event
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'eventTitle', 'occasion', 'dateIso', 'timeLabel',
+                             'outfitId', 'outfitTitle', 'reminderLeadMinutes', 'reminderEnabled',
+                             'reminderEpochMillis', 'notes', 'updatedAt'
+                           ])
+                         );
+
+        allow delete: if isOwner(userId) && isValidId(eventId);
+      }
+
+      // Seasonal Discount Alerts Subcollection
+      match /discountAlerts/{alertId} {
+        allow get: if isOwner(userId) && isValidId(alertId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(alertId) &&
+                         incoming().keys().hasAll(['userId', 'itemName', 'brandName', 'targetDiscountPercent', 'activeAlert', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'itemName', 'brandName', 'category', 'targetDiscountPercent',
+                           'currentDiscountPercent', 'ecoCertified', 'activeAlert', 'seasonalTag',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidDiscountAlert(incoming());
+
+        allow update: if isOwner(userId) &&
+                         isValidId(alertId) &&
+                         isValidDiscountAlert(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt && (
+                           // Action: Toggle Alert Status
+                           incoming().diff(existing()).affectedKeys().hasOnly(['activeAlert', 'updatedAt']) ||
+                           // Action: Update Alert Target
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'itemName', 'brandName', 'category', 'targetDiscountPercent',
+                             'currentDiscountPercent', 'ecoCertified', 'activeAlert', 'seasonalTag',
+                             'updatedAt'
+                           ])
+                         );
+
+        allow delete: if isOwner(userId) && isValidId(alertId);
+      }
+    }
+  }
+}

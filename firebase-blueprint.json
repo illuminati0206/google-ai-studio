@@ -1,0 +1,141 @@
+{
+  "entities": {
+    "UserStyleProfile": {
+      "title": "User Style Profile",
+      "description": "Personal style preferences, gender, body structure measurements, and skin tone match analysis for an authenticated user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "displayName": { "type": "string", "description": "User display name." },
+        "gender": { "type": "string", "enum": ["Women", "Men", "Non-Binary"] },
+        "stylePreferences": { "type": "array", "description": "Up to 12 aesthetic preferences." },
+        "budgetTier": { "type": "string", "enum": ["Accessible", "Contemporary", "Luxury", "Sustainable First"] },
+        "bodyType": { "type": "string", "description": "Detected or selected body structure archetype." },
+        "heightCm": { "type": "integer", "description": "Height in centimeters." },
+        "chestCm": { "type": "integer", "description": "Chest or bust measurement in cm." },
+        "waistCm": { "type": "integer", "description": "Waist measurement in cm." },
+        "hipCm": { "type": "integer", "description": "Hip measurement in cm." },
+        "shoulderCm": { "type": "integer", "description": "Shoulder width in cm." },
+        "skinTone": { "type": "string", "description": "Skin tone depth category." },
+        "skinUndertone": { "type": "string", "description": "Warm, Cool, Neutral, or Olive undertone." },
+        "bestColors": { "type": "array", "description": "Recommended flattering color names or hexes." },
+        "avoidColors": { "type": "array", "description": "Colors to avoid based on undertone." },
+        "fitSummary": { "type": "string", "description": "AI body-fit tailoring summary." },
+        "bodyAnalysisNotes": { "type": "string", "description": "Detailed AI body structure and proportion advice." },
+        "bodyScanLocalPath": { "type": "string", "description": "Device-local file path to the user body reference scan." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." }
+      },
+      "required": ["userId", "gender", "createdAt", "updatedAt"]
+    },
+    "WardrobeItem": {
+      "title": "Wardrobe Item",
+      "description": "A garment, shoe, or accessory uploaded to the user's virtual wardrobe with material and condition health metadata.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string", "enum": ["Top", "Bottom", "Outerwear", "Dress / Suit", "Ethnic / Festive", "Shoes", "Footwear", "Accessory"] },
+        "colorName": { "type": "string" },
+        "colorHex": { "type": "string" },
+        "materialType": { "type": "string", "enum": ["Silk", "Cotton", "Wool", "Linen", "Cashmere", "Denim", "Leather", "Velvet", "Synthetic Blend"] },
+        "fabric": { "type": "string" },
+        "season": { "type": "string" },
+        "formality": { "type": "string" },
+        "conditionStatus": { "type": "string", "enum": ["Mint", "Good", "Fair / Needs Care", "Worn / Damaged"] },
+        "keepDecision": { "type": "string", "enum": ["Keep", "Repair / Dry Clean", "Donate / Replace"] },
+        "conditionNotes": { "type": "string" },
+        "brand": { "type": "string" },
+        "localImagePath": { "type": "string" },
+        "ecoScore": { "type": "integer" },
+        "wearCount": { "type": "integer" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." }
+      },
+      "required": ["userId", "name", "category", "colorName", "createdAt", "updatedAt"]
+    },
+    "SavedOutfit": {
+      "title": "Saved Outfit",
+      "description": "A curated or mix-and-matched outfit combination saved by the user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "occasion": { "type": "string" },
+        "itemIds": { "type": "array" },
+        "itemSummary": { "type": "string" },
+        "colorHarmonyScore": { "type": "integer" },
+        "fitScore": { "type": "integer" },
+        "stylingNotes": { "type": "string" },
+        "tryOnImagePath": { "type": "string" },
+        "sourceType": { "type": "string", "enum": ["MIX_MATCH", "AI_CURATED", "TRY_ON"] },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." }
+      },
+      "required": ["userId", "title", "occasion", "itemIds", "createdAt", "updatedAt"]
+    },
+    "PlannedOutfitEvent": {
+      "title": "Planned Outfit Event",
+      "description": "A calendar-scheduled styling session or upcoming event with an assigned outfit and reminder.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "eventTitle": { "type": "string" },
+        "occasion": { "type": "string" },
+        "dateIso": { "type": "string" },
+        "timeLabel": { "type": "string" },
+        "outfitId": { "type": "string" },
+        "outfitTitle": { "type": "string" },
+        "reminderLeadMinutes": { "type": "integer" },
+        "reminderEnabled": { "type": "boolean" },
+        "reminderEpochMillis": { "type": "integer" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." }
+      },
+      "required": ["userId", "eventTitle", "occasion", "dateIso", "createdAt", "updatedAt"]
+    },
+    "DiscountAlert": {
+      "title": "Seasonal Discount Alert",
+      "description": "User watchlist entry tracking seasonal discounts on recommended upgrade pieces and sustainable brands.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "itemName": { "type": "string" },
+        "brandName": { "type": "string" },
+        "category": { "type": "string" },
+        "targetDiscountPercent": { "type": "integer" },
+        "currentDiscountPercent": { "type": "integer" },
+        "ecoCertified": { "type": "boolean" },
+        "activeAlert": { "type": "boolean" },
+        "seasonalTag": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." }
+      },
+      "required": ["userId", "itemName", "brandName", "targetDiscountPercent", "activeAlert", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserStyleProfile" },
+      "description": "Per-user style profile, gender, body structure measurements, and skin tone match."
+    },
+    "/users/{userId}/wardrobeItems/{itemId}": {
+      "schema": { "$ref": "#/entities/WardrobeItem" },
+      "description": "Uploaded garments in the user's virtual wardrobe."
+    },
+    "/users/{userId}/outfits/{outfitId}": {
+      "schema": { "$ref": "#/entities/SavedOutfit" },
+      "description": "Saved mix-and-match and AI-curated outfit combinations."
+    },
+    "/users/{userId}/plannedEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/PlannedOutfitEvent" },
+      "description": "Calendar-planned outfits for upcoming events with reminder metadata."
+    },
+    "/users/{userId}/discountAlerts/{alertId}": {
+      "schema": { "$ref": "#/entities/DiscountAlert" },
+      "description": "Tracked seasonal discount alerts for wardrobe upgrades and sustainable brands."
+    }
+  }
+}

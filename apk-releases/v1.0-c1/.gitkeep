@@ -1,0 +1,2 @@
+Version folder initialized for Atelier v1.0 (versionCode 1).
+Run `gradle :app:assembleDebug :app:archiveVersionedApk` to copy versioned APKs here.
