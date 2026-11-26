@@ -2,7 +2,7 @@
 <defaultsMap>
     <entry>
         <key>latest_version_code</key>
-        <value>9</value>
+        <value>10</value>
     </entry>
     <entry>
         <key>min_supported_version_code</key>
@@ -10,11 +10,11 @@
     </entry>
     <entry>
         <key>latest_version_name</key>
-        <value>1.8</value>
+        <value>1.9</value>
     </entry>
     <entry>
         <key>update_release_notes</key>
-        <value>New wardrobe styling enhancements, Firebase Remote Config version alerts, and seamless Google Play In-App Updates.</value>
+        <value>Atelier v1.9 test update build: verifies automatic GitHub and Firebase Remote Config update detection.</value>
     </entry>
     <entry>
         <key>force_update_enabled</key>
