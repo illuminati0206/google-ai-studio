@@ -68,17 +68,22 @@ import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
 import com.example.data.firebase.signOutUser
 import com.example.data.model.AsyncUiState
 import com.example.data.model.AtelierConstants
 import com.example.data.model.UserStyleProfile
-import com.example.ui.components.GitHubUpdateDialog
+import com.example.data.update.PlayUpdateUiState
+import com.example.ui.components.AppUpdatesCenterDialog
+import com.example.ui.components.MandatoryRemoteConfigUpdateDialog
 import com.example.ui.screens.DiscoverScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.PlannerScreen
 import com.example.ui.screens.TryOnStudioScreen
 import com.example.ui.screens.WardrobeScreen
 import com.example.ui.viewmodel.AtelierViewModel
+import kotlinx.coroutines.flow.StateFlow
 
 enum class AtelierDestination(
     val route: String,
@@ -96,6 +101,11 @@ enum class AtelierDestination(
 @Composable
 fun AtelierRootApp(
     currentUserId: String,
+    playUpdateStateFlow: StateFlow<PlayUpdateUiState>,
+    onCheckPlayUpdates: () -> Unit,
+    onStartPlayInAppUpdate: (preferImmediate: Boolean) -> Unit,
+    onCompleteFlexiblePlayUpdate: () -> Unit,
+    onOpenPlayStoreListing: () -> Unit,
     onSignedOut: () -> Unit
 ) {
     val context = LocalContext.current
@@ -113,6 +123,9 @@ fun AtelierRootApp(
 
     val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
     val profileState by viewModel.profileState.collectAsStateWithLifecycle()
+    val remoteConfigUpdateState by viewModel.remoteConfigUpdateState.collectAsStateWithLifecycle()
+    val mandatoryUpdateDismissed by viewModel.mandatoryUpdateDismissed.collectAsStateWithLifecycle()
+    val playUpdateState by playUpdateStateFlow.collectAsStateWithLifecycle()
     val githubRepo by viewModel.githubRepo.collectAsStateWithLifecycle()
     val updateCheckState by viewModel.updateCheckState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -122,6 +135,20 @@ fun AtelierRootApp(
         if (!msg.isNullOrBlank()) {
             snackbarHostState.showSnackbar(msg)
             viewModel.clearBannerMessage()
+        }
+    }
+
+    // Prompt user across any tab when a flexible Google Play update finishes downloading
+    LaunchedEffect(playUpdateState) {
+        if (playUpdateState is PlayUpdateUiState.Downloaded) {
+            val res = snackbarHostState.showSnackbar(
+                message = "Update downloaded via Google Play.",
+                actionLabel = "RESTART",
+                duration = SnackbarDuration.Indefinite
+            )
+            if (res == SnackbarResult.ActionPerformed) {
+                onCompleteFlexiblePlayUpdate()
+            }
         }
     }
 
@@ -206,8 +233,12 @@ fun AtelierRootApp(
                         when (currentTab) {
                             AtelierDestination.HOME -> HomeScreen(
                                 viewModel = viewModel,
+                                playUpdateState = playUpdateState,
                                 onOpenProfileSheet = { showProfileDialog = true },
                                 onOpenUpdateDialog = { showUpdateDialog = true },
+                                onStartFlexiblePlayUpdate = { onStartPlayInAppUpdate(false) },
+                                onStartImmediatePlayUpdate = { onStartPlayInAppUpdate(true) },
+                                onCompleteFlexiblePlayUpdate = onCompleteFlexiblePlayUpdate,
                                 onNavigateToWardrobe = { currentTab = AtelierDestination.WARDROBE },
                                 onNavigateToStudio = { currentTab = AtelierDestination.STUDIO },
                                 onNavigateToDiscover = { currentTab = AtelierDestination.DISCOVER },
@@ -251,13 +282,33 @@ fun AtelierRootApp(
         )
     }
 
+    val remoteUpdateInfo = (remoteConfigUpdateState as? AsyncUiState.Success)?.data
+    if (remoteUpdateInfo != null && remoteUpdateInfo.isForceUpdate && !mandatoryUpdateDismissed) {
+        MandatoryRemoteConfigUpdateDialog(
+            info = remoteUpdateInfo,
+            onUpdateImmediate = { onStartPlayInAppUpdate(true) },
+            onOpenPlayStore = onOpenPlayStoreListing,
+            onDismissLater = { viewModel.dismissMandatoryUpdateDialog() }
+        )
+    }
+
     if (showUpdateDialog) {
-        GitHubUpdateDialog(
-            savedRepo = githubRepo,
-            updateState = updateCheckState,
+        AppUpdatesCenterDialog(
+            remoteConfigState = remoteConfigUpdateState,
+            playUpdateState = playUpdateState,
+            savedGitHubRepo = githubRepo,
+            gitHubUpdateState = updateCheckState,
             onDismiss = { showUpdateDialog = false },
-            onCheckUpdates = { repo -> viewModel.saveGitHubRepoAndCheck(repo) },
-            onOpenUrl = { url -> viewModel.openGitHubUpdateUrl(url) }
+            onRefreshRemoteConfigAndPlay = {
+                viewModel.checkRemoteConfigUpdate(forceFetch = true, silent = false)
+                onCheckPlayUpdates()
+            },
+            onStartFlexiblePlayUpdate = { onStartPlayInAppUpdate(false) },
+            onStartImmediatePlayUpdate = { onStartPlayInAppUpdate(true) },
+            onCompleteFlexiblePlayUpdate = onCompleteFlexiblePlayUpdate,
+            onOpenPlayStore = onOpenPlayStoreListing,
+            onCheckGitHubRepo = { repo -> viewModel.saveGitHubRepoAndCheck(repo) },
+            onOpenGitHubUrl = { url -> viewModel.openGitHubUpdateUrl(url) }
         )
     }
 }
@@ -346,7 +397,7 @@ private fun StyleProfileDialog(
                         .testTag("profile_github_updates_button")
                 ) {
                     Icon(Icons.Outlined.SystemUpdate, contentDescription = null)
-                    Text("  Check GitHub App Updates")
+                    Text("  App Updates (Play & Remote Config)")
                 }
 
                 OutlinedButton(

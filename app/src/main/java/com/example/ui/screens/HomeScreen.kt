@@ -81,6 +81,7 @@ import com.example.data.model.AsyncUiState
 import com.example.data.model.AtelierConstants
 import com.example.data.model.PlannedOutfitEvent
 import com.example.data.model.UserStyleProfile
+import com.example.data.update.PlayUpdateUiState
 import com.example.data.weather.WeatherForecastSnapshot
 import com.example.domain.CompatibleOutfitProposal
 import com.example.ui.components.AtelierAiLoadingCard
@@ -89,6 +90,7 @@ import com.example.ui.components.AtelierTagPill
 import com.example.ui.components.ColorSwatchDot
 import com.example.ui.components.EditorialSectionHeader
 import com.example.ui.components.HomeUpdateAvailableBanner
+import com.example.ui.components.PlayAndRemoteConfigUpdateBanner
 import com.example.ui.theme.AtelierObsidian
 import com.example.ui.viewmodel.AtelierViewModel
 import com.example.util.SocialShareHelper
@@ -96,8 +98,12 @@ import com.example.util.SocialShareHelper
 @Composable
 fun HomeScreen(
     viewModel: AtelierViewModel,
+    playUpdateState: PlayUpdateUiState,
     onOpenProfileSheet: () -> Unit,
     onOpenUpdateDialog: () -> Unit,
+    onStartFlexiblePlayUpdate: () -> Unit,
+    onStartImmediatePlayUpdate: () -> Unit,
+    onCompleteFlexiblePlayUpdate: () -> Unit,
     onNavigateToWardrobe: () -> Unit,
     onNavigateToStudio: () -> Unit,
     onNavigateToDiscover: () -> Unit,
@@ -113,6 +119,8 @@ fun HomeScreen(
     val weatherState by viewModel.weatherState.collectAsStateWithLifecycle()
     val weatherCityQuery by viewModel.weatherCityQuery.collectAsStateWithLifecycle()
     val weatherOutfits by viewModel.weatherSuggestedOutfits.collectAsStateWithLifecycle()
+    val remoteConfigUpdateState by viewModel.remoteConfigUpdateState.collectAsStateWithLifecycle()
+    val remoteConfigBannerDismissed by viewModel.remoteConfigBannerDismissed.collectAsStateWithLifecycle()
     val updateCheckState by viewModel.updateCheckState.collectAsStateWithLifecycle()
     val updateBannerDismissed by viewModel.updateBannerDismissed.collectAsStateWithLifecycle()
 
@@ -120,7 +128,13 @@ fun HomeScreen(
     val wardrobeCount = (wardrobeState as? AsyncUiState.Success)?.data?.size ?: 0
     val savedCount = (outfitsState as? AsyncUiState.Success)?.data?.size ?: 0
     val nextEvent = (eventsState as? AsyncUiState.Success)?.data?.firstOrNull()
+    val remoteConfigInfo = (remoteConfigUpdateState as? AsyncUiState.Success)?.data
     val availableRelease = (updateCheckState as? AsyncUiState.Success)?.data?.takeIf { it.isUpdateAvailable }
+    val hasAnyUpdateAvailable = (remoteConfigInfo?.isUpdateAvailable == true) ||
+        playUpdateState is PlayUpdateUiState.UpdateAvailable ||
+        playUpdateState is PlayUpdateUiState.Downloading ||
+        playUpdateState is PlayUpdateUiState.Downloaded ||
+        availableRelease != null
 
     var showCityPickerDialog by remember { mutableStateOf(false) }
 
@@ -173,14 +187,14 @@ fun HomeScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
                         shape = RoundedCornerShape(14.dp),
-                        color = if (availableRelease != null) {
+                        color = if (hasAnyUpdateAvailable) {
                             MaterialTheme.colorScheme.primaryContainer
                         } else {
                             MaterialTheme.colorScheme.surface
                         },
                         border = BorderStroke(
                             1.dp,
-                            if (availableRelease != null) {
+                            if (hasAnyUpdateAvailable) {
                                 MaterialTheme.colorScheme.primary
                             } else {
                                 MaterialTheme.colorScheme.outlineVariant
@@ -195,8 +209,8 @@ fun HomeScreen(
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Outlined.SystemUpdate,
-                                contentDescription = "Check GitHub app updates",
-                                tint = if (availableRelease != null) {
+                                contentDescription = "Check app updates",
+                                tint = if (hasAnyUpdateAvailable) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
                                     MaterialTheme.colorScheme.onSurface
@@ -226,7 +240,26 @@ fun HomeScreen(
             }
         }
 
-        // GitHub Release Update Banner (shown automatically when newer version exists)
+        // Firebase Remote Config & Google Play In-App Updates Banner
+        val showPlayOrRemoteBanner = (playUpdateState is PlayUpdateUiState.Downloading ||
+            playUpdateState is PlayUpdateUiState.Downloaded) ||
+            (!remoteConfigBannerDismissed && (remoteConfigInfo?.isUpdateAvailable == true || playUpdateState is PlayUpdateUiState.UpdateAvailable))
+
+        if (showPlayOrRemoteBanner) {
+            item {
+                PlayAndRemoteConfigUpdateBanner(
+                    remoteConfigInfo = remoteConfigInfo,
+                    playUpdateState = playUpdateState,
+                    onStartFlexibleUpdate = onStartFlexiblePlayUpdate,
+                    onStartImmediateUpdate = onStartImmediatePlayUpdate,
+                    onCompleteFlexibleUpdate = onCompleteFlexiblePlayUpdate,
+                    onOpenDetails = onOpenUpdateDialog,
+                    onDismiss = { viewModel.dismissRemoteConfigBanner() }
+                )
+            }
+        }
+
+        // GitHub Release Update Banner (shown automatically when newer release exists on GitHub)
         if (availableRelease != null && !updateBannerDismissed) {
             item {
                 HomeUpdateAvailableBanner(

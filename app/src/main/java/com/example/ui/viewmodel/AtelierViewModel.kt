@@ -22,6 +22,8 @@ import com.example.data.model.WardrobeItem
 import com.example.data.repository.AtelierRepository
 import com.example.data.update.GitHubReleaseCheckResult
 import com.example.data.update.GitHubUpdateService
+import com.example.data.update.RemoteConfigUpdateInfo
+import com.example.data.update.RemoteConfigUpdateService
 import com.example.data.weather.WeatherForecastSnapshot
 import com.example.data.weather.WeatherService
 import com.example.domain.CompatibleOutfitProposal
@@ -53,7 +55,8 @@ class AtelierViewModel(
     private val repository: AtelierRepository,
     private val aiService: AtelierAiService,
     private val weatherService: WeatherService = WeatherService(),
-    private val updateService: GitHubUpdateService = GitHubUpdateService()
+    private val updateService: GitHubUpdateService = GitHubUpdateService(),
+    private val remoteConfigUpdateService: RemoteConfigUpdateService = RemoteConfigUpdateService()
 ) : ViewModel() {
 
     private fun <T> unwrapFirestoreErrors(
@@ -213,6 +216,16 @@ class AtelierViewModel(
     private val _bannerMessage = MutableStateFlow<String?>(null)
     val bannerMessage: StateFlow<String?> = _bannerMessage.asStateFlow()
 
+    // --- Firebase Remote Config Version Code Check ---
+    private val _remoteConfigUpdateState = MutableStateFlow<AsyncUiState<RemoteConfigUpdateInfo>>(AsyncUiState.Idle)
+    val remoteConfigUpdateState: StateFlow<AsyncUiState<RemoteConfigUpdateInfo>> = _remoteConfigUpdateState.asStateFlow()
+
+    private val _remoteConfigBannerDismissed = MutableStateFlow(false)
+    val remoteConfigBannerDismissed: StateFlow<Boolean> = _remoteConfigBannerDismissed.asStateFlow()
+
+    private val _mandatoryUpdateDismissed = MutableStateFlow(false)
+    val mandatoryUpdateDismissed: StateFlow<Boolean> = _mandatoryUpdateDismissed.asStateFlow()
+
     // --- GitHub Releases In-App Update Checker ---
     private val _githubRepo = MutableStateFlow(updateService.loadSavedRepo(appContext))
     val githubRepo: StateFlow<String> = _githubRepo.asStateFlow()
@@ -229,8 +242,46 @@ class AtelierViewModel(
             repository.ensureUserProfile(defaultName)
         }
         fetchWeatherForCity(_weatherCityQuery.value)
+        checkRemoteConfigUpdate(forceFetch = false, silent = true)
         if (_githubRepo.value.isNotBlank()) {
             checkForGitHubUpdate(silent = true)
+        }
+    }
+
+    fun dismissRemoteConfigBanner() {
+        _remoteConfigBannerDismissed.value = true
+    }
+
+    fun dismissMandatoryUpdateDialog() {
+        _mandatoryUpdateDismissed.value = true
+    }
+
+    fun checkRemoteConfigUpdate(forceFetch: Boolean = true, silent: Boolean = false) {
+        viewModelScope.launch {
+            if (!silent) {
+                _remoteConfigUpdateState.value = AsyncUiState.Loading
+            }
+            try {
+                val info = remoteConfigUpdateService.checkLatestVersion(forceFetch = forceFetch)
+                _remoteConfigUpdateState.value = AsyncUiState.Success(info)
+                if (info.isUpdateAvailable) {
+                    _remoteConfigBannerDismissed.value = false
+                    if (!silent) {
+                        _bannerMessage.value = "New update v${info.latestVersionName} (Code ${info.latestVersionCode}) is available."
+                    }
+                } else if (!silent) {
+                    _bannerMessage.value = "Remote Config verified: Atelier v${info.currentVersionName} (Code ${info.currentVersionCode}) is up to date."
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Firebase Remote Config check failed", e)
+                if (!silent) {
+                    _remoteConfigUpdateState.value = AsyncUiState.Error(
+                        e.localizedMessage ?: "Could not fetch Firebase Remote Config version info."
+                    )
+                }
+            }
         }
     }
 

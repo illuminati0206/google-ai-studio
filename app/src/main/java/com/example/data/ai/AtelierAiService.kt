@@ -2,6 +2,7 @@ package com.example.data.ai
 
 import android.graphics.Bitmap
 import android.util.Log
+import com.example.data.firebase.forceRefreshAppCheckToken
 import com.example.data.model.AiOutfitRecommendation
 import com.example.data.model.AtelierConstants
 import com.example.data.model.BodyScanAnalysisResult
@@ -299,6 +300,17 @@ class AtelierAiService {
             msg.contains("try again later")
     }
 
+    private fun isAppCheckTokenError(error: Throwable): Boolean {
+        val msg = generateSequence(error) { it.cause }
+            .mapNotNull { it.message }
+            .joinToString(" ")
+            .lowercase()
+        return msg.contains("app check") ||
+            msg.contains("appcheck") ||
+            msg.contains("token is invalid") ||
+            msg.contains("firebase app check")
+    }
+
     private fun isFailoverEligibleError(error: Throwable): Boolean {
         return isQuotaOrRateLimitError(error) || isHighDemandOrTransientError(error)
     }
@@ -350,6 +362,12 @@ class AtelierAiService {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (isAppCheckTokenError(e)) {
+                    Log.w(TAG, "$operationName hit App Check token error on $fallbackModelName; force-refreshing token and retrying once.")
+                    forceRefreshAppCheckToken()
+                    delay(600L)
+                    return withTimeout(fallbackTimeoutMs) { block(fallbackModel) }
+                }
                 markModelQuotaCooldown(fallbackModelName, e)
                 throw e
             }
@@ -367,6 +385,22 @@ class AtelierAiService {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            if (isAppCheckTokenError(e)) {
+                Log.w(TAG, "$operationName hit App Check token error on $primaryModelName; force-refreshing token and retrying once.")
+                forceRefreshAppCheckToken()
+                delay(600L)
+                return try {
+                    withTimeout(primaryTimeoutMs) { block(primaryModel) }
+                } catch (retryErr: TimeoutCancellationException) {
+                    withTimeout(fallbackTimeoutMs) { block(fallbackModel) }
+                } catch (retryErr: CancellationException) {
+                    throw retryErr
+                } catch (retryErr: Exception) {
+                    if (!isFailoverEligibleError(retryErr)) throw retryErr
+                    markModelQuotaCooldown(primaryModelName, retryErr)
+                    withTimeout(fallbackTimeoutMs) { block(fallbackModel) }
+                }
+            }
             if (!isFailoverEligibleError(e)) throw e
             markModelQuotaCooldown(primaryModelName, e)
             Log.w(TAG, "$operationName hit quota/demand limit on $primaryModelName; switching immediately to $fallbackModelName.", e)

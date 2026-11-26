@@ -8,6 +8,8 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.appcheck.recaptcha.RecaptchaAppCheckProviderFactory
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.tasks.await
 
 private const val TAG = "AppCheckInit"
 
@@ -18,14 +20,23 @@ private const val META_PREFS_NAME = "atelier_appcheck_meta"
 private const val KEY_INTENT_TOKEN_REGISTERED = "intent_token_registered"
 private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
 
+private val providerInstalled = AtomicBoolean(false)
+
 fun configureAppCheck(context: Context, intent: Intent?) {
     try {
         if (FirebaseApp.getApps(context).isEmpty()) {
             FirebaseApp.initializeApp(context)
         }
 
+        val debugToken = if (BuildConfig.DEBUG) intent?.getStringExtra(DEBUG_TOKEN_EXTRA) else null
+
+        // Avoid re-installing the App Check provider on Activity recreation / onNewIntent
+        // unless a new debug token extra was explicitly delivered by the test harness.
+        if (providerInstalled.get() && debugToken.isNullOrEmpty()) {
+            return
+        }
+
         if (BuildConfig.DEBUG) {
-            val debugToken = intent?.getStringExtra(DEBUG_TOKEN_EXTRA)
             val metaPrefs = context.getSharedPreferences(META_PREFS_NAME, Context.MODE_PRIVATE)
 
             if (!debugToken.isNullOrEmpty()) {
@@ -45,17 +56,17 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                 FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
                     DebugAppCheckProviderFactory.getInstance()
                 )
+                providerInstalled.set(true)
                 Log.d(TAG, "App Check debug secret configured from launch intent and DebugAppCheckProviderFactory installed.")
             } else if (metaPrefs.getBoolean(KEY_INTENT_TOKEN_REGISTERED, false)) {
-                // Previously received a valid registered debug token from the harness on this device/emulator.
                 FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
                     DebugAppCheckProviderFactory.getInstance()
                 )
+                providerInstalled.set(true)
                 Log.d(TAG, "DebugAppCheckProviderFactory installed using previously registered intent token.")
             } else {
                 // Direct APK install on a physical device without a harness debug token:
-                // Use reCAPTCHA Enterprise attestation so Firebase AI Logic receives a real valid App Check token
-                // instead of an unregistered random debug UUID.
+                // Use reCAPTCHA Enterprise attestation so Firebase AI Logic receives a real valid App Check token.
                 val installedRecaptcha = installRecaptchaProviderIfAvailable(context)
                 if (!installedRecaptcha) {
                     FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
@@ -63,9 +74,12 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                     )
                     Log.w(TAG, "No debug token or reCAPTCHA site key found; fell back to DebugAppCheckProviderFactory.")
                 }
+                providerInstalled.set(true)
             }
         } else {
-            installRecaptchaProviderIfAvailable(context)
+            if (installRecaptchaProviderIfAvailable(context)) {
+                providerInstalled.set(true)
+            }
         }
     } catch (e: Exception) {
         Log.e(TAG, "Failed to initialize Firebase App Check", e)
@@ -87,14 +101,26 @@ private fun installRecaptchaProviderIfAvailable(context: Context): Boolean {
         Log.e(TAG, "recaptcha_site_key resource string is blank.")
         return false
     }
-    val appCheck = FirebaseAppCheck.getInstance()
-    appCheck.installAppCheckProviderFactory(
+    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
         RecaptchaAppCheckProviderFactory.getInstance(siteKey)
     )
-    // Pre-warm reCAPTCHA App Check token asynchronously so first Gemini request is immediate.
-    appCheck.getAppCheckToken(false)
-        .addOnSuccessListener { Log.d(TAG, "App Check token pre-warmed successfully.") }
-        .addOnFailureListener { e -> Log.w(TAG, "App Check token pre-warm deferred: ${e.localizedMessage}") }
     Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
     return true
+}
+
+/**
+ * Forces a fresh App Check attestation token when a cached/expired token is rejected by the backend.
+ */
+suspend fun forceRefreshAppCheckToken(): Boolean {
+    return try {
+        val tokenResult = FirebaseAppCheck.getInstance()
+            .getAppCheckToken(/* forceRefresh = */ true)
+            .await()
+        val valid = tokenResult.token.isNotBlank()
+        Log.d(TAG, "Force-refreshed App Check token (valid=$valid).")
+        valid
+    } catch (e: Exception) {
+        Log.w(TAG, "Failed to force-refresh App Check token", e)
+        false
+    }
 }
