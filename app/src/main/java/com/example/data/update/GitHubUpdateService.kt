@@ -3,6 +3,7 @@ package com.example.data.update
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Base64
 import android.util.Log
 import com.example.BuildConfig
 import java.io.BufferedReader
@@ -17,6 +18,7 @@ import org.json.JSONObject
 private const val TAG = "GitHubUpdateService"
 private const val PREFS_NAME = "atelier_github_update_prefs"
 private const val KEY_GITHUB_REPO = "github_repo_slug"
+private const val DEFAULT_GITHUB_REPO = "illuminati0206/google-ai-studio"
 private val REPO_SLUG_REGEX = Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 data class GitHubReleaseCheckResult(
@@ -38,7 +40,8 @@ class GitHubUpdateService {
 
     fun loadSavedRepo(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getString(KEY_GITHUB_REPO, "").orEmpty().trim()
+        val saved = prefs.getString(KEY_GITHUB_REPO, "").orEmpty().trim()
+        return saved.ifBlank { DEFAULT_GITHUB_REPO }
     }
 
     fun saveRepo(context: Context, repoSlug: String) {
@@ -65,105 +68,227 @@ class GitHubUpdateService {
         return if (REPO_SLUG_REGEX.matches(slug)) slug else null
     }
 
+    /**
+     * Checks for updates in 3 automatic tiers:
+     * 1. GitHub Releases (/releases/latest or /releases?per_page=1)
+     * 2. Versioned APK archive folders pushed to /apk-releases/ on the default branch
+     * 3. Version metadata in app/build.gradle.kts on the default branch
+     */
     suspend fun checkLatestRelease(rawRepoInput: String): GitHubReleaseCheckResult =
         withContext(Dispatchers.IO) {
             val repoSlug = normalizeAndValidateRepo(rawRepoInput)
                 ?: throw IllegalArgumentException(
-                    "Invalid GitHub repository format. Enter owner/repo (for example: yourname/atelier-app)."
+                    "Invalid GitHub repository format. Enter owner/repo (for example: illuminati0206/google-ai-studio)."
                 )
 
-            val latestEndpoint = "https://api.github.com/repos/$repoSlug/releases/latest"
-            val latestResponse = httpGetJson(latestEndpoint)
+            // Tier 1: GitHub Releases API
+            val releaseResult = tryFetchFromReleases(repoSlug)
+            if (releaseResult != null) return@withContext releaseResult
 
-            val releaseJson: JSONObject = when (latestResponse.first) {
-                200 -> JSONObject(latestResponse.second)
-                404 -> {
-                    // Fallback to /releases?per_page=1 in case only pre-releases exist
-                    val listResponse = httpGetJson("https://api.github.com/repos/$repoSlug/releases?per_page=1")
-                    if (listResponse.first == 200) {
-                        val arr = JSONArray(listResponse.second)
-                        if (arr.length() > 0) {
-                            arr.getJSONObject(0)
-                        } else {
-                            throw IllegalStateException(
-                                "No GitHub Releases found in $repoSlug yet. Publish a Release on GitHub with your new APK to enable update alerts."
-                            )
-                        }
-                    } else if (listResponse.first == 404) {
-                        throw IllegalStateException(
-                            "Repository \"$repoSlug\" was not found or is private. Make sure the repo name is correct and public."
-                        )
-                    } else {
-                        throw IllegalStateException(
-                            "GitHub API returned HTTP ${listResponse.first}. Please try again shortly."
-                        )
-                    }
-                }
-                403 -> throw IllegalStateException(
-                    "GitHub API rate limit reached for this network. Please retry in a few minutes."
-                )
-                else -> throw IllegalStateException(
-                    "GitHub API returned HTTP ${latestResponse.first}. Please verify your internet connection and repo name."
-                )
-            }
+            // Tier 2: Versioned apk-releases/ directory in the repo's default branch
+            val archiveResult = tryFetchFromApkReleasesFolder(repoSlug)
+            if (archiveResult != null) return@withContext archiveResult
 
-            val tagName = releaseJson.optString("tag_name", "").trim()
-            if (tagName.isBlank()) {
-                throw IllegalStateException("Latest GitHub Release is missing a version tag (e.g. v1.6).")
-            }
+            // Tier 3: Read versionName / versionCode directly from app/build.gradle.kts on default branch
+            val gradleResult = tryFetchFromGradleFile(repoSlug)
+            if (gradleResult != null) return@withContext gradleResult
 
-            val releaseTitle = releaseJson.optString("name", tagName).ifBlank { tagName }
-            val releaseNotes = releaseJson.optString("body", "").trim()
-            val publishedDate = releaseJson.optString("published_at", "").take(10)
-            val htmlUrl = releaseJson.optString("html_url", "https://github.com/$repoSlug/releases")
-            val safeReleasePageUrl = sanitizeGitHubUrl(htmlUrl)
-                ?: "https://github.com/$repoSlug/releases"
-
-            var apkUrl: String? = null
-            var apkName: String? = null
-            var apkSize = 0L
-
-            val assets = releaseJson.optJSONArray("assets")
-            if (assets != null) {
-                for (i in 0 until assets.length()) {
-                    val asset = assets.optJSONObject(i) ?: continue
-                    val name = asset.optString("name", "")
-                    if (name.endsWith(".apk", ignoreCase = true)) {
-                        val downloadUrl = asset.optString("browser_download_url", "")
-                        val safeDownload = sanitizeGitHubUrl(downloadUrl)
-                        if (safeDownload != null) {
-                            apkUrl = safeDownload
-                            apkName = name
-                            apkSize = asset.optLong("size", 0L)
-                            break
-                        }
-                    }
-                }
-            }
-
-            val currentVersionName = BuildConfig.VERSION_NAME
-            val currentVersionCode = BuildConfig.VERSION_CODE
-            val updateAvailable = isRemoteVersionNewer(
-                remoteTag = tagName,
-                currentVersionName = currentVersionName,
-                currentVersionCode = currentVersionCode
-            )
-
-            GitHubReleaseCheckResult(
-                repoSlug = repoSlug,
-                currentVersionName = currentVersionName,
-                currentVersionCode = currentVersionCode,
-                latestTag = tagName,
-                releaseTitle = releaseTitle,
-                releaseNotes = releaseNotes,
-                publishedDate = publishedDate,
-                releasePageUrl = safeReleasePageUrl,
-                apkDownloadUrl = apkUrl,
-                apkFileName = apkName,
-                apkSizeBytes = apkSize,
-                isUpdateAvailable = updateAvailable
+            throw IllegalStateException(
+                "No public GitHub Release or versioned build found in \"$repoSlug\". Make sure the repo is public and changes are pushed."
             )
         }
+
+    private fun tryFetchFromReleases(repoSlug: String): GitHubReleaseCheckResult? {
+        val latestResponse = httpGetJson("https://api.github.com/repos/$repoSlug/releases/latest")
+        val releaseJson: JSONObject? = when (latestResponse.first) {
+            200 -> JSONObject(latestResponse.second)
+            404 -> {
+                val listResponse = httpGetJson("https://api.github.com/repos/$repoSlug/releases?per_page=1")
+                when (listResponse.first) {
+                    200 -> {
+                        val arr = JSONArray(listResponse.second)
+                        if (arr.length() > 0) arr.getJSONObject(0) else null
+                    }
+                    403 -> throw IllegalStateException(
+                        "GitHub API rate limit reached for this network. Please retry in a few minutes."
+                    )
+                    else -> null
+                }
+            }
+            403 -> throw IllegalStateException(
+                "GitHub API rate limit reached for this network. Please retry in a few minutes."
+            )
+            else -> null
+        }
+
+        if (releaseJson == null) return null
+        val tagName = releaseJson.optString("tag_name", "").trim()
+        if (tagName.isBlank()) return null
+
+        val releaseTitle = releaseJson.optString("name", tagName).ifBlank { tagName }
+        val releaseNotes = releaseJson.optString("body", "").trim()
+        val publishedDate = releaseJson.optString("published_at", "").take(10)
+        val htmlUrl = releaseJson.optString("html_url", "https://github.com/$repoSlug/releases")
+        val safeReleasePageUrl = sanitizeGitHubUrl(htmlUrl) ?: "https://github.com/$repoSlug/releases"
+
+        var apkUrl: String? = null
+        var apkName: String? = null
+        var apkSize = 0L
+
+        val assets = releaseJson.optJSONArray("assets")
+        if (assets != null) {
+            for (i in 0 until assets.length()) {
+                val asset = assets.optJSONObject(i) ?: continue
+                val name = asset.optString("name", "")
+                if (name.endsWith(".apk", ignoreCase = true)) {
+                    val safeDownload = sanitizeGitHubUrl(asset.optString("browser_download_url", ""))
+                    if (safeDownload != null) {
+                        apkUrl = safeDownload
+                        apkName = name
+                        apkSize = asset.optLong("size", 0L)
+                        break
+                    }
+                }
+            }
+        }
+
+        val currentVersionName = BuildConfig.VERSION_NAME
+        val currentVersionCode = BuildConfig.VERSION_CODE
+        val updateAvailable = isRemoteVersionNewer(tagName, currentVersionName, currentVersionCode)
+
+        return GitHubReleaseCheckResult(
+            repoSlug = repoSlug,
+            currentVersionName = currentVersionName,
+            currentVersionCode = currentVersionCode,
+            latestTag = tagName,
+            releaseTitle = releaseTitle,
+            releaseNotes = releaseNotes,
+            publishedDate = publishedDate,
+            releasePageUrl = safeReleasePageUrl,
+            apkDownloadUrl = apkUrl,
+            apkFileName = apkName,
+            apkSizeBytes = apkSize,
+            isUpdateAvailable = updateAvailable
+        )
+    }
+
+    /**
+     * Checks /apk-releases/ directly on the repo's default branch so pushing from AI Studio
+     * automatically publishes updates without needing a manual GitHub Release.
+     */
+    private fun tryFetchFromApkReleasesFolder(repoSlug: String): GitHubReleaseCheckResult? {
+        val dirResp = httpGetJson("https://api.github.com/repos/$repoSlug/contents/apk-releases")
+        if (dirResp.first != 200) return null
+
+        val entries = JSONArray(dirResp.second)
+        val versionFolders = mutableListOf<Pair<String, String>>()
+        for (i in 0 until entries.length()) {
+            val obj = entries.optJSONObject(i) ?: continue
+            if (obj.optString("type") == "dir") {
+                val name = obj.optString("name", "")
+                val htmlUrl = obj.optString("html_url", "https://github.com/$repoSlug/tree/main/apk-releases/$name")
+                if (name.startsWith("v", ignoreCase = true)) {
+                    versionFolders.add(name to htmlUrl)
+                }
+            }
+        }
+        if (versionFolders.isEmpty()) return null
+
+        // Pick highest semantic version + build code folder (e.g. v1.8-c9)
+        val latestFolder = versionFolders.maxWithOrNull { a, b -> compareVersionTags(a.first, b.first) }
+            ?: return null
+
+        val latestTag = latestFolder.first
+        val folderPageUrl = sanitizeGitHubUrl(latestFolder.second)
+            ?: "https://github.com/$repoSlug/tree/main/apk-releases/$latestTag"
+
+        var apkUrl: String? = null
+        var apkName: String? = null
+        var apkSize = 0L
+
+        val filesResp = httpGetJson("https://api.github.com/repos/$repoSlug/contents/apk-releases/$latestTag")
+        if (filesResp.first == 200) {
+            val files = JSONArray(filesResp.second)
+            for (i in 0 until files.length()) {
+                val f = files.optJSONObject(i) ?: continue
+                val name = f.optString("name", "")
+                if (name.endsWith(".apk", ignoreCase = true)) {
+                    val download = sanitizeGitHubUrl(f.optString("download_url", ""))
+                    if (download != null) {
+                        apkUrl = download
+                        apkName = name
+                        apkSize = f.optLong("size", 0L)
+                        break
+                    }
+                }
+            }
+        }
+
+        val currentVersionName = BuildConfig.VERSION_NAME
+        val currentVersionCode = BuildConfig.VERSION_CODE
+        val updateAvailable = isRemoteVersionNewer(latestTag, currentVersionName, currentVersionCode)
+
+        return GitHubReleaseCheckResult(
+            repoSlug = repoSlug,
+            currentVersionName = currentVersionName,
+            currentVersionCode = currentVersionCode,
+            latestTag = latestTag,
+            releaseTitle = "Atelier $latestTag (GitHub apk-releases)",
+            releaseNotes = if (apkUrl != null) {
+                "Detected directly from apk-releases/$latestTag on GitHub. Tap Download APK to install."
+            } else {
+                "New build $latestTag detected in apk-releases/. Open GitHub to download or publish the APK."
+            },
+            publishedDate = "",
+            releasePageUrl = folderPageUrl,
+            apkDownloadUrl = apkUrl,
+            apkFileName = apkName,
+            apkSizeBytes = apkSize,
+            isUpdateAvailable = updateAvailable
+        )
+    }
+
+    /**
+     * Fallback: parses versionName and versionCode directly from app/build.gradle.kts in the repo.
+     */
+    private fun tryFetchFromGradleFile(repoSlug: String): GitHubReleaseCheckResult? {
+        val resp = httpGetJson("https://api.github.com/repos/$repoSlug/contents/app/build.gradle.kts")
+        if (resp.first != 200) return null
+
+        val json = JSONObject(resp.second)
+        val encoded = json.optString("content", "").replace("\n", "")
+        if (encoded.isBlank()) return null
+
+        val decoded = runCatching {
+            String(Base64.decode(encoded, Base64.DEFAULT), Charsets.UTF_8)
+        }.getOrNull() ?: return null
+
+        val versionName = Regex("""versionName\s*=\s*"([^"]+)"""").find(decoded)?.groupValues?.getOrNull(1)
+            ?: return null
+        val versionCode = Regex("""versionCode\s*=\s*(\d+)""").find(decoded)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: return null
+
+        val latestTag = "v$versionName-c$versionCode"
+        val currentVersionName = BuildConfig.VERSION_NAME
+        val currentVersionCode = BuildConfig.VERSION_CODE
+        val updateAvailable = versionCode > currentVersionCode ||
+            isRemoteVersionNewer(latestTag, currentVersionName, currentVersionCode)
+
+        return GitHubReleaseCheckResult(
+            repoSlug = repoSlug,
+            currentVersionName = currentVersionName,
+            currentVersionCode = currentVersionCode,
+            latestTag = latestTag,
+            releaseTitle = "Atelier v$versionName (Build $versionCode on GitHub main)",
+            releaseNotes = "Detected from app/build.gradle.kts on GitHub. Create a GitHub Release with the APK attached for one-tap browser download.",
+            publishedDate = "",
+            releasePageUrl = "https://github.com/$repoSlug/releases",
+            apkDownloadUrl = null,
+            apkFileName = null,
+            apkSizeBytes = 0L,
+            isUpdateAvailable = updateAvailable
+        )
+    }
 
     /**
      * Opens a verified GitHub HTTPS URL in the user's external browser (zero restricted permissions,
@@ -219,8 +344,26 @@ class GitHubUpdateService {
     }
 
     companion object {
+        fun compareVersionTags(tagA: String, tagB: String): Int {
+            val cleanA = tagA.trim().removePrefix("v").removePrefix("V")
+            val cleanB = tagB.trim().removePrefix("v").removePrefix("V")
+            val partsA = extractNumericParts(cleanA.substringBefore("-"))
+            val partsB = extractNumericParts(cleanB.substringBefore("-"))
+
+            val maxLen = maxOf(partsA.size, partsB.size)
+            for (i in 0 until maxLen) {
+                val a = partsA.getOrElse(i) { 0 }
+                val b = partsB.getOrElse(i) { 0 }
+                if (a != b) return a.compareTo(b)
+            }
+
+            val buildA = extractBuildCode(cleanA) ?: 0
+            val buildB = extractBuildCode(cleanB) ?: 0
+            return buildA.compareTo(buildB)
+        }
+
         /**
-         * Compares tags such as "v1.6", "1.6.1", or "v1.6-c7" against currentVersionName / currentVersionCode.
+         * Compares tags such as "v1.6", "1.6.1", or "v1.8-c9" against currentVersionName / currentVersionCode.
          */
         fun isRemoteVersionNewer(
             remoteTag: String,
@@ -239,13 +382,19 @@ class GitHubUpdateService {
                 if (r != c) return r > c
             }
 
-            // Same semantic version — check optional "-c<buildCode>" suffix (matching apk-releases/v1.5-c6)
-            val buildMatch = Regex("(?i)(?:-c|build[_-]?)(\\d+)").find(cleanedTag)
-            val remoteBuildCode = buildMatch?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val remoteBuildCode = extractBuildCode(cleanedTag)
             if (remoteBuildCode != null) {
                 return remoteBuildCode > currentVersionCode
             }
             return false
+        }
+
+        private fun extractBuildCode(cleanedTag: String): Int? {
+            return Regex("(?i)(?:-c|build[_-]?)(\\d+)")
+                .find(cleanedTag)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
         }
 
         private fun extractNumericParts(version: String): List<Int> {
